@@ -1,0 +1,204 @@
+#!/usr/bin/python3
+
+"""A simple paper calendar."""
+
+import argparse
+import datetime
+import itertools
+import locale
+import logging
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate
+from reportlab.platypus import Table
+from reportlab.platypus import TableStyle
+
+# Format strings
+FMT_TABLE_HEADER = '%A, %d.%m.%Y (KW: %W)'
+FMT_TABLE_DATA_TIME = '%H:%M'
+
+
+def table_style():
+    """The default table style."""
+    return TableStyle([
+        ('FONT', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8.5),
+        ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.black),
+
+        # Header
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+        
+        # Content: timeslots
+        ('ALIGN', (0, 1), (0, -1), 'CENTER'),
+        ('VALIGN', (0, 1), (0, -1), 'MIDDLE'),
+        ('ALIGN', (2, 1), (2, -1), 'CENTER'),
+        ('VALIGN', (2, 1), (2, -1), 'MIDDLE'),
+        ('ALIGN', (4, 1), (4, -1), 'CENTER'),
+        ('VALIGN', (4, 1), (4, -1), 'MIDDLE'),
+
+        # Content: text
+        ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+        ('VALIGN', (1, 1), (1, -1), 'TOP'),
+        ('ALIGN', (3, 1), (3, -1), 'LEFT'),
+        ('VALIGN', (3, 1), (3, -1), 'TOP'),
+        ('ALIGN', (5, 1), (5, -1), 'LEFT'),
+        ('VALIGN', (5, 1), (5, -1), 'TOP'),
+    ])
+
+
+def table_style_col_widths(num_columns):
+    """Build the column widths: [time col width, text col width, …]."""
+    time_col_width = 1 * cm
+    text_col_width = 5.8 * cm
+    return list(itertools.chain.from_iterable(
+        zip(num_columns // 2 * (time_col_width, text_col_width))))
+
+
+def table_style_row_heights(num_rows):
+    """Build the row heights."""
+    result = [0.7*cm]
+    result.extend((num_rows -1) * [cm])
+    return result
+
+
+def table_content_build_text_column(time_list):
+    """Build the text column for a given time list."""
+    result = [None for _ in range(len(time_list))]
+    try:
+        idx = time_list.index('12:00')
+        result[idx] = 'MITTAG'
+    except ValueError:
+        pass
+    return result
+
+def get_timeslots_mon(date, delta=datetime.timedelta(minutes=20)):
+    """Get the available timeslots for mondays."""
+    result = []
+
+    # before lunch
+    begin = datetime.datetime.combine(date, datetime.time(10, 30))
+    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
+
+    begin += delta*2
+    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
+
+    begin += delta
+    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
+
+    # lunch
+    begin = datetime.datetime.combine(date, datetime.time(12, 0))
+    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
+
+    # after lunch
+    begin = datetime.datetime.combine(date, datetime.time(13, 0))
+    end = datetime.datetime.combine(date, datetime.time(19, 0))
+    while begin <= end:
+        result.append(begin.strftime('%H:%M'))
+        begin += delta
+
+    return result
+
+def get_timeslots_tue(date, delta=datetime.timedelta(minutes=20)):
+    """Get the available timeslots for tuesdays."""
+    return get_timeslots_mon(date, delta)
+
+def get_timeslots_wed(date, delta=datetime.timedelta(minutes=20)):
+    """Get the available timeslots for wednesdays."""
+    result = []
+
+    # before lunch
+    begin = datetime.datetime.combine(date, datetime.time(8, 0))
+    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
+
+    begin += delta*2
+    end = datetime.datetime.combine(date, datetime.time(11, 20))
+    while begin <= end:
+        result.append(begin.strftime('%H:%M'))
+        begin += delta
+
+    # lunch
+    begin = datetime.datetime.combine(date, datetime.time(12, 0))
+    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
+
+    # after lunch
+    begin = datetime.datetime.combine(date, datetime.time(13, 0))
+    end = datetime.datetime.combine(date, datetime.time(16, 40))
+    while begin <= end:
+        result.append(begin.strftime('%H:%M'))
+        begin += delta
+
+    return result
+
+
+def build_table_header(dates):
+    """Build the table header."""
+    str_dates = [d.strftime(FMT_TABLE_HEADER) for d in dates]
+    none_dates = [None for _ in range(len(dates))]
+    return list(itertools.chain.from_iterable(zip(none_dates, str_dates)))
+
+
+def build_table_content(dates):
+    """Build the table content."""
+    mon, tue, wed = dates
+
+    # timeslots
+    timeslots_mon = get_timeslots_mon(mon)
+    timeslots_tue = get_timeslots_tue(tue)
+    timeslots_wed = get_timeslots_wed(wed)
+
+    # content
+    content = []
+    content.append(timeslots_mon)
+    content.append(table_content_build_text_column(timeslots_mon))
+    content.append(timeslots_tue)
+    content.append(table_content_build_text_column(timeslots_tue))
+    content.append(timeslots_wed)
+    content.append(table_content_build_text_column(timeslots_wed))
+    return zip(*content)
+
+
+def build_table(dates):
+    """Build the table."""
+    content = []
+    content.extend(build_table_content(dates))
+    content.insert(0, build_table_header(dates))
+    return content
+
+
+def parse_args():
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(description="A simple paper calendar")
+    parser.add_argument(
+        '-v', '--verbosity',
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="DEBUG", help="the log verbosity level")
+    parser.add_argument(
+        '-l', '--locale', default="de_AT.UTF-8", help="the locale to use")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    logging.basicConfig(level=args.verbosity)
+    locale.setlocale(locale.LC_ALL, args.locale)
+
+    # Table
+    table_content = build_table([datetime.date(2016, 10, 3), datetime.date(2016, 10, 4), datetime.date(2016, 10, 5)])
+    table = Table(
+        table_content,
+        colWidths=table_style_col_widths(len(table_content[0])),
+        rowHeights=table_style_row_heights(len(table_content)))
+    table.setStyle(table_style())
+
+    # Document
+    doc = SimpleDocTemplate('calendar.pdf', topMargin=0, pagesize=A4)
+    doc.build([table])
+
+if __name__ == '__main__':
+    main()
+
+# vim: tabstop=4 expandtab shiftwidth=4 softtabstop=4 smartindent autoindent
