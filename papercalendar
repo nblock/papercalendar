@@ -7,6 +7,7 @@ import datetime
 import itertools
 import locale
 import logging
+import os
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -31,7 +32,7 @@ def table_style():
         # Header
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
         ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
-        
+
         # Content: timeslots
         ('ALIGN', (0, 1), (0, -1), 'CENTER'),
         ('VALIGN', (0, 1), (0, -1), 'MIDDLE'),
@@ -75,6 +76,7 @@ def table_content_build_text_column(time_list):
         pass
     return result
 
+
 def get_timeslots_mon(date, delta=datetime.timedelta(minutes=20)):
     """Get the available timeslots for mondays."""
     result = []
@@ -102,9 +104,11 @@ def get_timeslots_mon(date, delta=datetime.timedelta(minutes=20)):
 
     return result
 
+
 def get_timeslots_tue(date, delta=datetime.timedelta(minutes=20)):
     """Get the available timeslots for tuesdays."""
     return get_timeslots_mon(date, delta)
+
 
 def get_timeslots_wed(date, delta=datetime.timedelta(minutes=20)):
     """Get the available timeslots for wednesdays."""
@@ -169,6 +173,44 @@ def build_table(dates):
     return content
 
 
+def build_document(output_directory, dates, prefix='dates'):
+    """Build a document from dates and store it in output_directory."""
+    # Table
+    table_content = build_table(dates)
+    table = Table(
+        table_content,
+        colWidths=table_style_col_widths(len(table_content[0])),
+        rowHeights=table_style_row_heights(len(table_content)))
+    table.setStyle(table_style())
+
+    # Document
+    first, _, last = dates
+    path = os.path.join(
+        output_directory, '{}_{}-{}-{}_{}-{}-{}.pdf'.format(
+            prefix,
+            first.year, first.month, first.day,
+            last.year, last.month, last.day))
+    doc = SimpleDocTemplate(path, topMargin=0, pagesize=A4)
+    doc.build([table])
+
+
+def calculate_datetimes(week, year, count, relevant_days=3):
+    """Calculate a list of revelant datetimes: [[dt1, dt2, dt3], …]"""
+    result = []
+    day_delta = datetime.timedelta(days=1)
+    week_delta = datetime.timedelta(weeks=1)
+    initial_datetime = datetime.datetime.strptime('{}-{}-1'.format(year, week), '%Y-%U-%w')
+
+    for week_offset in range(count):
+        current_datetime = initial_datetime + week_offset * week_delta
+        group = []
+        for _ in range(relevant_days):
+            group.append(current_datetime)
+            current_datetime += day_delta
+        result.append(group)
+    return result
+
+
 def parse_args():
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="A simple paper calendar")
@@ -178,6 +220,18 @@ def parse_args():
         default="DEBUG", help="the log verbosity level")
     parser.add_argument(
         '-l', '--locale', default="de_AT.UTF-8", help="the locale to use")
+    parser.add_argument(
+        '-y', '--year', default=datetime.date.today().year, type=int,
+        help="the year to generate a calendar for")
+    parser.add_argument(
+        '-w', '--week', default=datetime.datetime.now().strftime('%W'), type=int,
+        help="the ISO calendar week to start with")
+    parser.add_argument(
+        '-c', '--count', default=3, type=int,
+        help="the number of weeks to generate a calendar for")
+    parser.add_argument(
+        '-o', '--output', default='.',
+        help="the output directory to store generated calendar files")
     return parser.parse_args()
 
 
@@ -186,17 +240,10 @@ def main():
     logging.basicConfig(level=args.verbosity)
     locale.setlocale(locale.LC_ALL, args.locale)
 
-    # Table
-    table_content = build_table([datetime.date(2016, 10, 3), datetime.date(2016, 10, 4), datetime.date(2016, 10, 5)])
-    table = Table(
-        table_content,
-        colWidths=table_style_col_widths(len(table_content[0])),
-        rowHeights=table_style_row_heights(len(table_content)))
-    table.setStyle(table_style())
+    date_groups = calculate_datetimes(args.week, args.year, args.count)
+    for dates in date_groups:
+        build_document(args.output, dates, prefix='termine')
 
-    # Document
-    doc = SimpleDocTemplate('calendar.pdf', topMargin=0, pagesize=A4)
-    doc.build([table])
 
 if __name__ == '__main__':
     main()
