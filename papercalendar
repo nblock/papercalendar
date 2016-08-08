@@ -2,6 +2,7 @@
 
 """A simple paper calendar."""
 
+import glob
 import argparse
 import datetime
 import itertools
@@ -9,6 +10,7 @@ import locale
 import logging
 import os
 
+from icalendar import Calendar
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -16,182 +18,277 @@ from reportlab.platypus import SimpleDocTemplate
 from reportlab.platypus import Table
 from reportlab.platypus import TableStyle
 
-# Format strings
-FMT_TABLE_HEADER = '%A, %d.%m.%Y (KW: %W)'
-FMT_TABLE_DATA_TIME = '%H:%M'
+
+class EventCache:
+    """Load events from *.ics files and cache them"""
+    def __init__(self, path, dates):
+        self._path = path
+        self._dates = dates
+        self._cache = self._initialize_cache()
+
+    @property
+    def cache(self):
+        return self._cache
+
+    def _initialize_cache(self):
+        """Initialize the internal event cache."""
+        cache = {}
+        for date in itertools.chain.from_iterable(self._dates):
+            cache[date] = []
+        return cache
+
+    def _as_datetime_date(self, datetime_obj):
+        try:
+            return datetime_obj.date()
+        except AttributeError:
+            return datetime_obj
+
+    def _as_datetime_time(self, datetime_obj):
+        try:
+            return datetime_obj.time()
+        except AttributeError as ex:
+            return datetime.time(0, 0, 0)
+
+    def load_from_filesystem(self):
+        for filepath in glob.glob('{}/*.ics'.format(self._path)):
+            with open(filepath, 'r') as f:
+                cal = Calendar.from_ical(f.read())
+                for event in cal.walk('VEVENT'):
+                    try:
+                        dtstart, dtend, summary = event['DTSTART'].dt, event['DTEND'].dt, str(event['SUMMARY'])
+                        dtstart_date = self._as_datetime_date(dtstart)
+                        dtend_date = self._as_datetime_date(dtend)
+                        dtstart_time = self._as_datetime_time(dtstart)
+                        dtend_time = self._as_datetime_time(dtend)
+
+                        if dtstart_date == dtend_date and dtstart_date in self._cache:
+                            logging.info('Adding event details to cache: {}, {}, {}'.format(summary, dtstart_time, dtend_time))
+                            self._cache[dtstart_date].append((dtstart_time, dtend_time, summary))
+                        else:
+                            logging.debug('Ignore event data from file: {}'.format(filepath))
+                    except KeyError as ex:
+                        #  Ignore possibly missing SUMMARY, DTSTART and DTEND
+                        logging.warning('Could not parse file: {}'.format(filepath))
+                        logging.exception(ex)
+
+    def add_lunchbreak(self, start=datetime.time(12, 0), end=datetime.time(13,0), text='MITTAG'):
+        for k in self._cache:
+            self._cache[k].append((start, end, text))
 
 
-def table_style():
-    """The default table style."""
-    return TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica'),
-        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8.5),
-        ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.black),
+class Scheduler:
+    """Schedule events."""
+
+    def __init__(self, dates, event_cache):
+        self._dates = dates
+        self._event_cache = event_cache
+
+    def schedule(self):
+        """Schedule events."""
+        content = []
+        content.extend(self.build_table_content())
+        content.insert(0, self.build_table_header())
+        return content
+
+    def build_table_header(self):
+        """Build the table header."""
+        none_dates = [None for _ in range(len(self._dates))]
+        return list(itertools.chain.from_iterable(zip(none_dates, self._dates)))
+
+    def build_table_content(self ):
+        """Build the table content."""
+        mon, tue, wed = self._dates
+
+        # timeslots
+        timeslots_mon = self.get_timeslots_mon(mon)
+        timeslots_tue = self.get_timeslots_tue(tue)
+        timeslots_wed = self.get_timeslots_wed(wed)
+
+        # content
+        content = []
+        content.append(timeslots_mon)
+        content.append(self.table_content_build_text_column(mon, timeslots_mon, self._event_cache[mon]))
+        content.append(timeslots_tue)
+        content.append(self.table_content_build_text_column(tue, timeslots_tue, self._event_cache[tue]))
+        content.append(timeslots_wed)
+        content.append(self.table_content_build_text_column(wed, timeslots_wed, self._event_cache[wed]))
+        return zip(*content)
+
+    def table_content_build_text_column(self, day, timeslots, event_cache_day):
+        """Build the text column for a given time list."""
+        result = [[] for _ in range(len(timeslots))]
+        times = [datetime.datetime.combine(day, t) for t in timeslots]
+
+        for start, end, summary in event_cache_day:
+            index_start = self._find_closest_time(datetime.datetime.combine(day, start), times)
+            index_end = self._find_closest_time(datetime.datetime.combine(day, end), times)
+            for offset in range(index_end-index_start):
+                result[index_start+offset].append(summary)
+
+        return result
+
+    def get_timeslots_mon(self, date, delta=datetime.timedelta(minutes=20)):
+        """Get the available timeslots for mondays."""
+        result = []
+
+        # before lunch
+        begin = datetime.datetime.combine(date, datetime.time(10, 30))
+        result.append(begin.time())
+
+        begin += delta*2
+        result.append(begin.time())
+
+        begin += delta
+        result.append(begin.time())
+
+        # lunch
+        begin = datetime.datetime.combine(date, datetime.time(12, 0))
+        result.append(begin.time())
+
+        # after lunch
+        begin = datetime.datetime.combine(date, datetime.time(13, 0))
+        end = datetime.datetime.combine(date, datetime.time(19, 0))
+        while begin <= end:
+            result.append(begin.time())
+            begin += delta
+
+        return result
+
+    def get_timeslots_tue(self, date, delta=datetime.timedelta(minutes=20)):
+        """Get the available timeslots for tuesdays."""
+        return self.get_timeslots_mon(date, delta)
+
+    def get_timeslots_wed(self, date, delta=datetime.timedelta(minutes=20)):
+        """Get the available timeslots for wednesdays."""
+        result = []
+
+        # before lunch
+        begin = datetime.datetime.combine(date, datetime.time(8, 0))
+        result.append(begin.time())
+
+        begin += delta*2
+        end = datetime.datetime.combine(date, datetime.time(11, 20))
+        while begin <= end:
+            result.append(begin.time())
+            begin += delta
+
+        # lunch
+        begin = datetime.datetime.combine(date, datetime.time(12, 0))
+        result.append(begin.time())
+
+        # after lunch
+        begin = datetime.datetime.combine(date, datetime.time(13, 0))
+        end = datetime.datetime.combine(date, datetime.time(16, 40))
+        while begin <= end:
+            result.append(begin.time())
+            begin += delta
+
+        return result
+
+    def _find_closest_time(self, time, slots):
+        """Find the closest time index."""
+        value = min(slots, key=lambda date: abs(time-date))
+        return slots.index(value)
+
+class Renderer:
+    """Render table content to a pdf file."""
+
+    # Format strings
+    FMT_TABLE_HEADER = '%A, %d.%m.%Y (KW: %U)'
+    FMT_TABLE_DATA_TIME = '%H:%M'
+
+    def __init__(self, output_directory, dates, prefix='dates'):
+        self._output = output_directory
+        self._dates = dates
+        self._prefix = prefix
+
+    def render(self, content):
+        prepared = self.prepare(content)
+        table = Table(
+            prepared,
+            colWidths=self.column_width_style(len(prepared[0])),
+            rowHeights=self.row_heigth_style(len(prepared)))
+        table.setStyle(self.table_style())
+
+        doc = SimpleDocTemplate(self.filename(), topMargin=0, pagesize=A4)
+        doc.build([table])
+
+    def prepare(self, content):
+        result = []
 
         # Header
-        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+        header = content[0]
+        result.append((
+            header[0],
+            header[1].strftime(self.FMT_TABLE_HEADER),
+            header[2],
+            header[3].strftime(self.FMT_TABLE_HEADER),
+            header[4],
+            header[5].strftime(self.FMT_TABLE_HEADER))
+        )
 
-        # Content: timeslots
-        ('ALIGN', (0, 1), (0, -1), 'CENTER'),
-        ('VALIGN', (0, 1), (0, -1), 'MIDDLE'),
-        ('ALIGN', (2, 1), (2, -1), 'CENTER'),
-        ('VALIGN', (2, 1), (2, -1), 'MIDDLE'),
-        ('ALIGN', (4, 1), (4, -1), 'CENTER'),
-        ('VALIGN', (4, 1), (4, -1), 'MIDDLE'),
+        # Rows
+        for row in content[1:]:
+            result.append((
+                row[0].strftime(self.FMT_TABLE_DATA_TIME),
+                '\n'.join(row[1]),
+                row[2].strftime(self.FMT_TABLE_DATA_TIME),
+                '\n'.join(row[3]),
+                row[4].strftime(self.FMT_TABLE_DATA_TIME),
+                '\n'.join(row[5]))
+            )
 
-        # Content: text
-        ('ALIGN', (1, 1), (1, -1), 'LEFT'),
-        ('VALIGN', (1, 1), (1, -1), 'TOP'),
-        ('ALIGN', (3, 1), (3, -1), 'LEFT'),
-        ('VALIGN', (3, 1), (3, -1), 'TOP'),
-        ('ALIGN', (5, 1), (5, -1), 'LEFT'),
-        ('VALIGN', (5, 1), (5, -1), 'TOP'),
-    ])
+        return result
 
+    def filename(self):
+        first, _, last = self._dates
+        return os.path.join(
+            self._output, '{}_{}-{}-{}_{}-{}-{}.pdf'.format(
+                self._prefix,
+                first.year, first.month, first.day,
+                last.year, last.month, last.day))
 
-def table_style_col_widths(num_columns):
-    """Build the column widths: [time col width, text col width, …]."""
-    time_col_width = 1 * cm
-    text_col_width = 5.8 * cm
-    return list(itertools.chain.from_iterable(
-        zip(num_columns // 2 * (time_col_width, text_col_width))))
+    def column_width_style(self, num_columns):
+        """Build the column widths: [time col width, text col width, …]."""
+        time_col_width = 1 * cm
+        text_col_width = 5.8 * cm
+        return list(itertools.chain.from_iterable(
+            zip(num_columns // 2 * (time_col_width, text_col_width))))
 
+    def row_heigth_style(self, num_rows):
+        """Build the row heights."""
+        result = [0.7*cm]
+        result.extend((num_rows -1) * [cm])
+        return result
 
-def table_style_row_heights(num_rows):
-    """Build the row heights."""
-    result = [0.7*cm]
-    result.extend((num_rows -1) * [cm])
-    return result
+    def table_style(self):
+        """The default table style."""
+        return TableStyle([
+            ('FONT', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8.5),
+            ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.black),
 
+            # Header
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
 
-def table_content_build_text_column(time_list):
-    """Build the text column for a given time list."""
-    result = [None for _ in range(len(time_list))]
-    try:
-        idx = time_list.index('12:00')
-        result[idx] = 'MITTAG'
-    except ValueError:
-        pass
-    return result
+            # Content: timeslots
+            ('ALIGN', (0, 1), (0, -1), 'CENTER'),
+            ('VALIGN', (0, 1), (0, -1), 'MIDDLE'),
+            ('ALIGN', (2, 1), (2, -1), 'CENTER'),
+            ('VALIGN', (2, 1), (2, -1), 'MIDDLE'),
+            ('ALIGN', (4, 1), (4, -1), 'CENTER'),
+            ('VALIGN', (4, 1), (4, -1), 'MIDDLE'),
 
-
-def get_timeslots_mon(date, delta=datetime.timedelta(minutes=20)):
-    """Get the available timeslots for mondays."""
-    result = []
-
-    # before lunch
-    begin = datetime.datetime.combine(date, datetime.time(10, 30))
-    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
-
-    begin += delta*2
-    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
-
-    begin += delta
-    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
-
-    # lunch
-    begin = datetime.datetime.combine(date, datetime.time(12, 0))
-    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
-
-    # after lunch
-    begin = datetime.datetime.combine(date, datetime.time(13, 0))
-    end = datetime.datetime.combine(date, datetime.time(19, 0))
-    while begin <= end:
-        result.append(begin.strftime('%H:%M'))
-        begin += delta
-
-    return result
-
-
-def get_timeslots_tue(date, delta=datetime.timedelta(minutes=20)):
-    """Get the available timeslots for tuesdays."""
-    return get_timeslots_mon(date, delta)
-
-
-def get_timeslots_wed(date, delta=datetime.timedelta(minutes=20)):
-    """Get the available timeslots for wednesdays."""
-    result = []
-
-    # before lunch
-    begin = datetime.datetime.combine(date, datetime.time(8, 0))
-    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
-
-    begin += delta*2
-    end = datetime.datetime.combine(date, datetime.time(11, 20))
-    while begin <= end:
-        result.append(begin.strftime('%H:%M'))
-        begin += delta
-
-    # lunch
-    begin = datetime.datetime.combine(date, datetime.time(12, 0))
-    result.append(begin.strftime(FMT_TABLE_DATA_TIME))
-
-    # after lunch
-    begin = datetime.datetime.combine(date, datetime.time(13, 0))
-    end = datetime.datetime.combine(date, datetime.time(16, 40))
-    while begin <= end:
-        result.append(begin.strftime('%H:%M'))
-        begin += delta
-
-    return result
-
-
-def build_table_header(dates):
-    """Build the table header."""
-    str_dates = [d.strftime(FMT_TABLE_HEADER) for d in dates]
-    none_dates = [None for _ in range(len(dates))]
-    return list(itertools.chain.from_iterable(zip(none_dates, str_dates)))
-
-
-def build_table_content(dates):
-    """Build the table content."""
-    mon, tue, wed = dates
-
-    # timeslots
-    timeslots_mon = get_timeslots_mon(mon)
-    timeslots_tue = get_timeslots_tue(tue)
-    timeslots_wed = get_timeslots_wed(wed)
-
-    # content
-    content = []
-    content.append(timeslots_mon)
-    content.append(table_content_build_text_column(timeslots_mon))
-    content.append(timeslots_tue)
-    content.append(table_content_build_text_column(timeslots_tue))
-    content.append(timeslots_wed)
-    content.append(table_content_build_text_column(timeslots_wed))
-    return zip(*content)
-
-
-def build_table(dates):
-    """Build the table."""
-    content = []
-    content.extend(build_table_content(dates))
-    content.insert(0, build_table_header(dates))
-    return content
-
-
-def build_document(output_directory, dates, prefix='dates'):
-    """Build a document from dates and store it in output_directory."""
-    # Table
-    table_content = build_table(dates)
-    table = Table(
-        table_content,
-        colWidths=table_style_col_widths(len(table_content[0])),
-        rowHeights=table_style_row_heights(len(table_content)))
-    table.setStyle(table_style())
-
-    # Document
-    first, _, last = dates
-    path = os.path.join(
-        output_directory, '{}_{}-{}-{}_{}-{}-{}.pdf'.format(
-            prefix,
-            first.year, first.month, first.day,
-            last.year, last.month, last.day))
-    doc = SimpleDocTemplate(path, topMargin=0, pagesize=A4)
-    doc.build([table])
+            # Content: text
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+            ('VALIGN', (1, 1), (1, -1), 'TOP'),
+            ('ALIGN', (3, 1), (3, -1), 'LEFT'),
+            ('VALIGN', (3, 1), (3, -1), 'TOP'),
+            ('ALIGN', (5, 1), (5, -1), 'LEFT'),
+            ('VALIGN', (5, 1), (5, -1), 'TOP'),
+        ])
 
 
 def calculate_datetimes(week, year, count, relevant_days=3):
@@ -205,7 +302,7 @@ def calculate_datetimes(week, year, count, relevant_days=3):
         current_datetime = initial_datetime + week_offset * week_delta
         group = []
         for _ in range(relevant_days):
-            group.append(current_datetime)
+            group.append(current_datetime.date())
             current_datetime += day_delta
         result.append(group)
     return result
@@ -230,19 +327,35 @@ def parse_args():
         '-c', '--count', default=3, type=int,
         help="the number of weeks to generate a calendar for")
     parser.add_argument(
+        '-s', '--source', default='.',
+        help="the source directory to look for *.ics files")
+    parser.add_argument(
         '-o', '--output', default='.',
         help="the output directory to store generated calendar files")
     return parser.parse_args()
 
 
 def main():
+    """Main"""
     args = parse_args()
     logging.basicConfig(level=args.verbosity)
     locale.setlocale(locale.LC_ALL, args.locale)
 
+    # Get a list of relevant dates.
     date_groups = calculate_datetimes(args.week, args.year, args.count)
+
+    # Load ics files into cache.
+    ec = EventCache(args.source, date_groups)
+    ec.load_from_filesystem()
+    ec.add_lunchbreak()
+
+    # Build documents.
     for dates in date_groups:
-        build_document(args.output, dates, prefix='termine')
+        content = Scheduler(dates, ec.cache).schedule()
+        renderer = Renderer(args.output, dates, prefix='termine')
+        renderer.render(content)
+        #  build_document(args.output, dates, ec.cache, prefix='termine')
+    print('DONE')
 
 
 if __name__ == '__main__':
