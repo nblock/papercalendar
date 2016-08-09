@@ -2,9 +2,9 @@
 
 """A simple paper calendar."""
 
-import glob
 import argparse
 import datetime
+import glob
 import itertools
 import locale
 import logging
@@ -28,7 +28,41 @@ class EventCache:
 
     @property
     def cache(self):
+        """Get the event cache."""
         return self._cache
+
+    def load_from_filesystem(self):
+        """Load events from *.ics files."""
+        for filepath in glob.glob('{}/*.ics'.format(self._path)):
+            with open(filepath, 'r') as f:
+                logging.debug('Loading data from file: {}'.format(filepath))
+                self.load_from_str(f.read())
+
+    def load_from_str(self, data):
+        """Load events from str."""
+        cal = Calendar.from_ical(data)
+        for event in cal.walk('VEVENT'):
+            try:
+                dtstart, dtend, summary = event['DTSTART'].dt, event['DTEND'].dt, str(event['SUMMARY'])
+                dtstart_date = self._as_datetime_date(dtstart)
+                dtend_date = self._as_datetime_date(dtend)
+                dtstart_time = self._as_datetime_time(dtstart)
+                dtend_time = self._as_datetime_time(dtend)
+
+                if dtstart_date == dtend_date and dtstart_date in self._cache:
+                    logging.info('Adding event details to cache: {}, {}, {}'.format(summary, dtstart_time, dtend_time))
+                    self._cache[dtstart_date].append((dtstart_time, dtend_time, summary))
+                else:
+                    logging.debug('Ignoring non-matching event.')
+            except KeyError as ex:
+                #  Ignore possibly missing SUMMARY, DTSTART and DTEND
+                logging.warning('Could not icalendar object from data.')
+                logging.exception(ex)
+
+    def add_lunchbreak(self, start=datetime.time(12, 0), end=datetime.time(13,0), text='MITTAG'):
+        """Add a lunchbreak for each day in the cache."""
+        for k in self._cache:
+            self._cache[k].append((start, end, text))
 
     def _initialize_cache(self):
         """Initialize the internal event cache."""
@@ -38,50 +72,27 @@ class EventCache:
         return cache
 
     def _as_datetime_date(self, datetime_obj):
+        """Ensure a datetime.date object."""
         try:
             return datetime_obj.date()
         except AttributeError:
             return datetime_obj
 
     def _as_datetime_time(self, datetime_obj):
+        """Ensure a datetime.time object."""
         try:
             return datetime_obj.time()
         except AttributeError as ex:
             return datetime.time(0, 0, 0)
 
-    def load_from_filesystem(self):
-        for filepath in glob.glob('{}/*.ics'.format(self._path)):
-            with open(filepath, 'r') as f:
-                cal = Calendar.from_ical(f.read())
-                for event in cal.walk('VEVENT'):
-                    try:
-                        dtstart, dtend, summary = event['DTSTART'].dt, event['DTEND'].dt, str(event['SUMMARY'])
-                        dtstart_date = self._as_datetime_date(dtstart)
-                        dtend_date = self._as_datetime_date(dtend)
-                        dtstart_time = self._as_datetime_time(dtstart)
-                        dtend_time = self._as_datetime_time(dtend)
-
-                        if dtstart_date == dtend_date and dtstart_date in self._cache:
-                            logging.info('Adding event details to cache: {}, {}, {}'.format(summary, dtstart_time, dtend_time))
-                            self._cache[dtstart_date].append((dtstart_time, dtend_time, summary))
-                        else:
-                            logging.debug('Ignore event data from file: {}'.format(filepath))
-                    except KeyError as ex:
-                        #  Ignore possibly missing SUMMARY, DTSTART and DTEND
-                        logging.warning('Could not parse file: {}'.format(filepath))
-                        logging.exception(ex)
-
-    def add_lunchbreak(self, start=datetime.time(12, 0), end=datetime.time(13,0), text='MITTAG'):
-        for k in self._cache:
-            self._cache[k].append((start, end, text))
-
 
 class Scheduler:
     """Schedule events."""
 
-    def __init__(self, dates, event_cache):
+    def __init__(self, dates, event_cache, delta=datetime.timedelta(minutes=20)):
         self._dates = dates
         self._event_cache = event_cache
+        self._delta=delta
 
     def schedule(self):
         """Schedule events."""
@@ -107,27 +118,27 @@ class Scheduler:
         # content
         content = []
         content.append(timeslots_mon)
-        content.append(self.table_content_build_text_column(mon, timeslots_mon, self._event_cache[mon]))
+        content.append(self.build_table_content_text(mon, timeslots_mon, self._event_cache[mon]))
         content.append(timeslots_tue)
-        content.append(self.table_content_build_text_column(tue, timeslots_tue, self._event_cache[tue]))
+        content.append(self.build_table_content_text(tue, timeslots_tue, self._event_cache[tue]))
         content.append(timeslots_wed)
-        content.append(self.table_content_build_text_column(wed, timeslots_wed, self._event_cache[wed]))
+        content.append(self.build_table_content_text(wed, timeslots_wed, self._event_cache[wed]))
         return zip(*content)
 
-    def table_content_build_text_column(self, day, timeslots, event_cache_day):
+    def build_table_content_text(self, day, timeslots, event_cache_day):
         """Build the text column for a given time list."""
         result = [[] for _ in range(len(timeslots))]
         times = [datetime.datetime.combine(day, t) for t in timeslots]
 
         for start, end, summary in event_cache_day:
-            index_start = self._find_closest_time(datetime.datetime.combine(day, start), times)
-            index_end = self._find_closest_time(datetime.datetime.combine(day, end), times)
+            index_start = self._find_closest_time_index(datetime.datetime.combine(day, start), times)
+            index_end = self._find_closest_time_index(datetime.datetime.combine(day, end), times)
             for offset in range(index_end-index_start):
                 result[index_start+offset].append(summary)
 
         return result
 
-    def get_timeslots_mon(self, date, delta=datetime.timedelta(minutes=20)):
+    def get_timeslots_mon(self, date):
         """Get the available timeslots for mondays."""
         result = []
 
@@ -135,10 +146,10 @@ class Scheduler:
         begin = datetime.datetime.combine(date, datetime.time(10, 30))
         result.append(begin.time())
 
-        begin += delta*2
+        begin += self._delta*2
         result.append(begin.time())
 
-        begin += delta
+        begin += self._delta
         result.append(begin.time())
 
         # lunch
@@ -150,15 +161,15 @@ class Scheduler:
         end = datetime.datetime.combine(date, datetime.time(19, 0))
         while begin <= end:
             result.append(begin.time())
-            begin += delta
+            begin += self._delta
 
         return result
 
-    def get_timeslots_tue(self, date, delta=datetime.timedelta(minutes=20)):
+    def get_timeslots_tue(self, date):
         """Get the available timeslots for tuesdays."""
-        return self.get_timeslots_mon(date, delta)
+        return self.get_timeslots_mon(date)
 
-    def get_timeslots_wed(self, date, delta=datetime.timedelta(minutes=20)):
+    def get_timeslots_wed(self, date):
         """Get the available timeslots for wednesdays."""
         result = []
 
@@ -166,11 +177,11 @@ class Scheduler:
         begin = datetime.datetime.combine(date, datetime.time(8, 0))
         result.append(begin.time())
 
-        begin += delta*2
+        begin += self._delta*2
         end = datetime.datetime.combine(date, datetime.time(11, 20))
         while begin <= end:
             result.append(begin.time())
-            begin += delta
+            begin += self._delta
 
         # lunch
         begin = datetime.datetime.combine(date, datetime.time(12, 0))
@@ -181,11 +192,11 @@ class Scheduler:
         end = datetime.datetime.combine(date, datetime.time(16, 40))
         while begin <= end:
             result.append(begin.time())
-            begin += delta
+            begin += self._delta
 
         return result
 
-    def _find_closest_time(self, time, slots):
+    def _find_closest_time_index(self, time, slots):
         """Find the closest time index."""
         value = min(slots, key=lambda date: abs(time-date))
         return slots.index(value)
@@ -203,6 +214,7 @@ class Renderer:
         self._prefix = prefix
 
     def render(self, content):
+        """Render content as dodcument."""
         prepared = self.prepare(content)
         table = Table(
             prepared,
@@ -210,10 +222,13 @@ class Renderer:
             rowHeights=self.row_heigth_style(len(prepared)))
         table.setStyle(self.table_style())
 
-        doc = SimpleDocTemplate(self.filename(), topMargin=0, pagesize=A4)
+        doc = SimpleDocTemplate(
+            self.filename(), topMargin=0, pagesize=A4,
+            author="papercalendar", title=self.title())
         doc.build([table])
 
     def prepare(self, content):
+        """Prepare the content for rendering."""
         result = []
 
         # Header
@@ -241,12 +256,21 @@ class Renderer:
         return result
 
     def filename(self):
+        """Build a document filename."""
         first, _, last = self._dates
         return os.path.join(
             self._output, '{}_{}-{}-{}_{}-{}-{}.pdf'.format(
                 self._prefix,
                 first.year, first.month, first.day,
                 last.year, last.month, last.day))
+
+    def title(self):
+        """Build a document title."""
+        first, _, last = self._dates
+        return '{}: {}.{}.{} - {}.{}.{}'.format(
+                self._prefix.title(),
+                first.day, first.month, first.year,
+                last.day, last.month, last.year)
 
     def column_width_style(self, num_columns):
         """Build the column widths: [time col width, text col width, …]."""
