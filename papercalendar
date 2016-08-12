@@ -81,11 +81,6 @@ class EventCache:
                     text, dtstart_time, dtend_time))
                 self._cache[day].append((dtstart_time, dtend_time, text))
 
-    def add_lunchbreak(self, start=datetime.time(12, 0), end=datetime.time(13,0), text='MITTAG'):
-        """Add a lunchbreak for each day in the cache."""
-        for k in self._cache:
-            self._cache[k].append((start, end, text))
-
     def _initialize_cache(self):
         """Initialize the internal event cache."""
         cache = {}
@@ -144,6 +139,7 @@ class Scheduler:
             index_start = self._find_closest_time_index(dt_start, times)
             num_slots = (dt_end - dt_start) // self._delta
             result[index_start].append(summary)
+
             for offset in range(1, num_slots):
                 result[index_start+offset].append('|')
 
@@ -321,6 +317,11 @@ class Renderer:
             ('VALIGN', (3, 1), (3, -1), 'TOP'),
             ('ALIGN', (5, 1), (5, -1), 'LEFT'),
             ('VALIGN', (5, 1), (5, -1), 'TOP'),
+
+            # Lunch breaks
+            ('BACKGROUND', (0, 4), (1, 4), colors.lightgrey),
+            ('BACKGROUND', (2, 4), (3, 4), colors.lightgrey),
+            ('BACKGROUND', (4, 11), (5, 11), colors.lightgrey),
         ])
 
 
@@ -390,7 +391,6 @@ def main():
     ec = EventCache(
         args.url, args.username, args.password, args.calendar, date_groups)
     ec.load_from_caldav()
-    ec.add_lunchbreak()
 
     # Build documents.
     for dates in date_groups:
