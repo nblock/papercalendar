@@ -11,7 +11,6 @@ import logging
 import os
 import time
 
-from icalendar import Calendar
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -19,6 +18,7 @@ from reportlab.platypus import SimpleDocTemplate
 from reportlab.platypus import Table
 from reportlab.platypus import TableStyle
 import caldav
+import vobject
 
 
 class EventCache:
@@ -66,14 +66,14 @@ class EventCache:
         dtstart = datetime.datetime.combine(day, datetime.time())
         dtend = dtstart + datetime.timedelta(days=1)
         for ev in calendar.date_search(dtstart, dtend):
-            ical = Calendar.from_ical(ev.data)
-            for event in ical.walk('VEVENT'):
-                local_dtstart = self.datetime_from_utc_to_local(event['DTSTART'].dt)
-                local_dtend = self.datetime_from_utc_to_local(event['DTEND'].dt)
-                summary = str(event['SUMMARY'])
+            ical = vobject.readOne(ev.data)
+            for event in ical.vevent_list:
+                local_dtstart = self.datetime_from_utc_to_local(event.dtstart.value)
+                local_dtend = self.datetime_from_utc_to_local(event.dtend.value)
+                summary = event.summary.value
                 try:
-                    text = ': '.join((summary, event['DESCRIPTION']))
-                except KeyError:
+                    text = ': '.join((summary, event.description.value))
+                except AttributeError:
                     text = summary
                 dtstart_time = self.datetime_as_time(local_dtstart)
                 dtend_time = self.datetime_as_time(local_dtend)
