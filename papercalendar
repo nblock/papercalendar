@@ -271,18 +271,15 @@ class Renderer:
         """Build a document filename."""
         first, _, last = self._dates
         return os.path.join(
-            self._output, '{}_{}-{}-{}_{}-{}-{}.pdf'.format(
-                self._prefix,
-                first.year, first.month, first.day,
-                last.year, last.month, last.day))
+            self._output, '{}_{}_{}.pdf'.format(self._prefix,
+                first.strftime('%Y-%m-%d'), last.strftime('%Y-%m-%d')))
 
     def title(self):
         """Build a document title."""
         first, _, last = self._dates
-        return '{}: {}.{}.{} - {}.{}.{}'.format(
+        return '{}: {} - {}'.format(
                 self._prefix.title(),
-                first.day, first.month, first.year,
-                last.day, last.month, last.year)
+                first.strftime('%d.%m.%Y'), last.strftime('%d.%m.%Y'))
 
     def column_width_style(self, num_columns):
         """Build the column widths: [time col width, text col width, …]."""
