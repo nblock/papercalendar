@@ -169,7 +169,7 @@ class Scheduler:
 
         # after lunch
         begin = datetime.datetime.combine(date, datetime.time(13, 0))
-        end = datetime.datetime.combine(date, datetime.time(19, 0))
+        end = datetime.datetime.combine(date, datetime.time(19, 20))
         while begin <= end:
             result.append(begin.time())
             begin += self._delta
@@ -200,7 +200,7 @@ class Scheduler:
 
         # after lunch
         begin = datetime.datetime.combine(date, datetime.time(13, 0))
-        end = datetime.datetime.combine(date, datetime.time(16, 40))
+        end = datetime.datetime.combine(date, datetime.time(17, 0))
         while begin <= end:
             result.append(begin.time())
             begin += self._delta
