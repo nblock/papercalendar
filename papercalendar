@@ -9,6 +9,7 @@ import itertools
 import locale
 import logging
 import os
+import time
 
 from icalendar import Calendar
 from reportlab.lib import colors
@@ -17,12 +18,14 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate
 from reportlab.platypus import Table
 from reportlab.platypus import TableStyle
+import caldav
 
 
 class EventCache:
-    """Load events from *.ics files and cache them"""
-    def __init__(self, path, dates):
-        self._path = path
+    """Load events from a caldav server and cache them"""
+    def __init__(self, url, username, password, calendar, dates):
+        self._url = 'https://{}:{}@{}'.format(username, password, url)
+        self._calendar = calendar
         self._dates = dates
         self._cache = self._initialize_cache()
 
@@ -31,33 +34,52 @@ class EventCache:
         """Get the event cache."""
         return self._cache
 
-    def load_from_filesystem(self):
-        """Load events from *.ics files."""
-        for filepath in glob.glob('{}/*.ics'.format(self._path)):
-            with open(filepath, 'r') as f:
-                logging.debug('Loading data from file: {}'.format(filepath))
-                self.load_from_str(f.read())
+    @staticmethod
+    def datetime_from_utc_to_local(utc):
+        epoch = time.mktime(utc.timetuple())
+        offset = datetime.datetime.fromtimestamp (epoch) - \
+            datetime.datetime.utcfromtimestamp (epoch)
+        return utc + offset
 
-    def load_from_str(self, data):
-        """Load events from str."""
-        cal = Calendar.from_ical(data)
-        for event in cal.walk('VEVENT'):
-            try:
-                dtstart, dtend, summary = event['DTSTART'].dt, event['DTEND'].dt, str(event['SUMMARY'])
-                dtstart_date = self._as_datetime_date(dtstart)
-                dtend_date = self._as_datetime_date(dtend)
-                dtstart_time = self._as_datetime_time(dtstart)
-                dtend_time = self._as_datetime_time(dtend)
+    @staticmethod
+    def datetime_as_time(datetime_obj):
+        """Ensure a datetime.time object."""
+        try:
+            return datetime_obj.time()
+        except AttributeError as ex:
+            return datetime.time(0, 0, 0)
 
-                if dtstart_date == dtend_date and dtstart_date in self._cache:
-                    logging.info('Adding event details to cache: {}, {}, {}'.format(summary, dtstart_time, dtend_time))
-                    self._cache[dtstart_date].append((dtstart_time, dtend_time, summary))
-                else:
-                    logging.debug('Ignoring non-matching event.')
-            except KeyError as ex:
-                #  Ignore possibly missing SUMMARY, DTSTART and DTEND
-                logging.warning('Could not icalendar object from data.')
-                logging.exception(ex)
+    def load_from_caldav(self):
+        """Load events from a caldav server."""
+        client = caldav.DAVClient(self._url)
+        principal = client.principal()
+        calendars = principal.calendars()
+
+        # The calendar should be retrieved by name.
+        calendar = [x for x in calendars if self._calendar in str(x.url)][0]
+        for day in itertools.chain.from_iterable(self._dates):
+            logging.debug('Load events for day: {}'.format(day))
+            self._load_from_caldav_for_day(calendar, day)
+
+    def _load_from_caldav_for_day(self, calendar, day):
+        """Load caldav events for a single day."""
+        dtstart = datetime.datetime.combine(day, datetime.time())
+        dtend = dtstart + datetime.timedelta(days=1)
+        for ev in calendar.date_search(dtstart, dtend):
+            ical = Calendar.from_ical(ev.data)
+            for event in ical.walk('VEVENT'):
+                local_dtstart = self.datetime_from_utc_to_local(event['DTSTART'].dt)
+                local_dtend = self.datetime_from_utc_to_local(event['DTEND'].dt)
+                summary = str(event['SUMMARY'])
+                try:
+                    text = ': '.join((summary, event['DESCRIPTION']))
+                except KeyError:
+                    text = summary
+                dtstart_time = self.datetime_as_time(local_dtstart)
+                dtend_time = self.datetime_as_time(local_dtend)
+                logging.debug('Adding cache entry: {}: {} - {}'.format(
+                    text, dtstart_time, dtend_time))
+                self._cache[day].append((dtstart_time, dtend_time, text))
 
     def add_lunchbreak(self, start=datetime.time(12, 0), end=datetime.time(13,0), text='MITTAG'):
         """Add a lunchbreak for each day in the cache."""
@@ -70,20 +92,6 @@ class EventCache:
         for date in itertools.chain.from_iterable(self._dates):
             cache[date] = []
         return cache
-
-    def _as_datetime_date(self, datetime_obj):
-        """Ensure a datetime.date object."""
-        try:
-            return datetime_obj.date()
-        except AttributeError:
-            return datetime_obj
-
-    def _as_datetime_time(self, datetime_obj):
-        """Ensure a datetime.time object."""
-        try:
-            return datetime_obj.time()
-        except AttributeError as ex:
-            return datetime.time(0, 0, 0)
 
 
 class Scheduler:
@@ -351,8 +359,17 @@ def parse_args():
         '-c', '--count', default=3, type=int,
         help="the number of weeks to generate a calendar for")
     parser.add_argument(
-        '-s', '--source', default='.',
-        help="the source directory to look for *.ics files")
+        '-u', '--url', required=True,
+        help="the URL for the caldav server")
+    parser.add_argument(
+        '-n', '--calendar', required=True,
+        help="the name of the calendar to query")
+    parser.add_argument(
+        '-U', '--username', required=True,
+        help="the username for the caldav server")
+    parser.add_argument(
+        '-P', '--password', required=True,
+        help="the password for the caldav server")
     parser.add_argument(
         '-o', '--output', default='.',
         help="the output directory to store generated calendar files")
@@ -369,8 +386,9 @@ def main():
     date_groups = calculate_datetimes(args.week, args.year, args.count)
 
     # Load ics files into cache.
-    ec = EventCache(args.source, date_groups)
-    ec.load_from_filesystem()
+    ec = EventCache(
+        args.url, args.username, args.password, args.calendar, date_groups)
+    ec.load_from_caldav()
     ec.add_lunchbreak()
 
     # Build documents.
@@ -378,8 +396,6 @@ def main():
         content = Scheduler(dates, ec.cache).schedule()
         renderer = Renderer(args.output, dates, prefix='termine')
         renderer.render(content)
-        #  build_document(args.output, dates, ec.cache, prefix='termine')
-    print('DONE')
 
 
 if __name__ == '__main__':
