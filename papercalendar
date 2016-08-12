@@ -139,10 +139,13 @@ class Scheduler:
         times = [datetime.datetime.combine(day, t) for t in timeslots]
 
         for start, end, summary in event_cache_day:
-            index_start = self._find_closest_time_index(datetime.datetime.combine(day, start), times)
-            index_end = self._find_closest_time_index(datetime.datetime.combine(day, end), times)
-            for offset in range(index_end-index_start):
-                result[index_start+offset].append(summary)
+            dt_start = datetime.datetime.combine(day, start)
+            dt_end = datetime.datetime.combine(day, end)
+            index_start = self._find_closest_time_index(dt_start, times)
+            num_slots = (dt_end - dt_start) // self._delta
+            result[index_start].append(summary)
+            for offset in range(1, num_slots):
+                result[index_start+offset].append('|')
 
         return result
 
@@ -208,6 +211,7 @@ class Scheduler:
         """Find the closest time index."""
         value = min(slots, key=lambda date: abs(time-date))
         return slots.index(value)
+
 
 class Renderer:
     """Render table content to a pdf file."""
