@@ -141,7 +141,10 @@ class Scheduler:
             result[index_start].append(summary)
 
             for offset in range(1, num_slots):
-                result[index_start+offset].append('|')
+                try:
+                    result[index_start+offset].append('|')
+                except KeyError:
+                    pass
 
         return result
 
