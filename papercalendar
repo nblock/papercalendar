@@ -234,7 +234,7 @@ class Renderer:
         table.setStyle(self.table_style())
 
         doc = SimpleDocTemplate(
-            self.filename(), topMargin=0, pagesize=A4,
+            self.filename(), topMargin=2*cm, pagesize=A4,
             author="papercalendar", title=self.title())
         doc.build([table])
 
