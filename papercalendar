@@ -216,7 +216,7 @@ class Renderer:
     """Render table content to a pdf file."""
 
     # Format strings
-    FMT_TABLE_HEADER = '%A, %d.%m.%Y (KW: %U)'
+    FMT_TABLE_HEADER = '%a, %d.%m.%Y (KW: %U)'
     FMT_TABLE_DATA_TIME = '%H:%M'
 
     def __init__(self, output_directory, dates, prefix='dates'):
@@ -289,16 +289,17 @@ class Renderer:
 
     def row_heigth_style(self, num_rows):
         """Build the row heights."""
-        result = [0.5*cm]
+        result = [0.7 * cm]
         result.extend((num_rows -1) * [0.9 * cm])
         return result
 
     def table_style(self):
         """The default table style."""
         return TableStyle([
-            ('FONT', (0, 0), (-1, -1), 'Helvetica'),
             ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8.5),
+            ('FONTSIZE', (0, 0), (-1, 0), 10.0),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 8.5),
             ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.black),
 
             # Header
