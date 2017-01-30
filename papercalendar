@@ -70,7 +70,10 @@ class EventCache:
             for event in ical.vevent_list:
                 local_dtstart = self.datetime_from_utc_to_local(event.dtstart.value)
                 local_dtend = self.datetime_from_utc_to_local(event.dtend.value)
-                summary = event.summary.value
+                try:
+                    summary = event.summary.value
+                except AttributeError:
+                    summary = 'FREIER TERMIN'
                 try:
                     text = ': '.join((summary, event.description.value))
                 except AttributeError:
