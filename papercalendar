@@ -219,7 +219,8 @@ class Renderer:
     """Render table content to a pdf file."""
 
     # Format strings
-    FMT_TABLE_HEADER = '%a, %d.%m.%Y (KW: %U)'
+    # %V is only supported on 3.6+
+    FMT_TABLE_HEADER = '%a, %d.%m.%Y (KW: {:02})'
     FMT_TABLE_DATA_TIME = '%H:%M'
 
     def __init__(self, output_directory, dates, prefix='dates'):
@@ -249,11 +250,14 @@ class Renderer:
         header = content[0]
         result.append((
             header[0],
-            header[1].strftime(self.FMT_TABLE_HEADER),
+            header[1].strftime(
+                self.FMT_TABLE_HEADER.format(header[1].isocalendar()[1])),
             header[2],
-            header[3].strftime(self.FMT_TABLE_HEADER),
+            header[3].strftime(
+                self.FMT_TABLE_HEADER.format(header[3].isocalendar()[1])),
             header[4],
-            header[5].strftime(self.FMT_TABLE_HEADER))
+            header[5].strftime(
+                self.FMT_TABLE_HEADER.format(header[5].isocalendar()[1])))
         )
 
         # Rows
